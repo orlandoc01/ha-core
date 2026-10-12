@@ -6,6 +6,7 @@ from typing import cast, override
 
 from uiprotect.data import DoorbellMessageType, ModelType, ProtectAdoptableDeviceModel
 from uiprotect.data.public_devices import PublicCamera, PublicDeviceModel
+from uiprotect.exceptions import NotAuthorized
 
 from homeassistant.components.text import TextEntity, TextEntityDescription
 from homeassistant.const import EntityCategory
@@ -39,9 +40,25 @@ def _get_doorbell_current(obj: PublicDeviceModel) -> str | None:
 
 async def _set_doorbell_message(obj: PublicCamera, message: str) -> None:
     # reset_at=None keeps the message up until it is changed
-    await obj.set_lcd_message(
-        DoorbellMessageType.CUSTOM_MESSAGE, text=message, reset_at=None
-    )
+    try:
+        await obj.set_lcd_message(
+            DoorbellMessageType.CUSTOM_MESSAGE, text=message, reset_at=None
+        )
+    except NotAuthorized:
+        # The public API rejects camera writes from a user holding only granular
+        # (per-camera) permissions; the private session, which this entity
+        # always has, honours them.
+        await obj.api.update_device(
+            ModelType.CAMERA,
+            obj.id,
+            {
+                "lcdMessage": {
+                    "type": DoorbellMessageType.CUSTOM_MESSAGE.value,
+                    "text": message,
+                    "resetAt": None,
+                }
+            },
+        )
 
 
 CAMERA: tuple[ProtectTextEntityDescription, ...] = (

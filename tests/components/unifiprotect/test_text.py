@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from uiprotect.data import Camera, DoorbellMessageType, LCDMessage, ModelType
 from uiprotect.data.public_devices import PublicDoorbellSettings, PublicLcdMessage
+from uiprotect.exceptions import NotAuthorized
 
 from homeassistant.components.unifiprotect.const import DEFAULT_ATTRIBUTION, DOMAIN
 from homeassistant.components.unifiprotect.text import CAMERA
@@ -98,6 +99,49 @@ async def test_text_camera_set(
         mock_method.assert_called_once_with(
             DoorbellMessageType.CUSTOM_MESSAGE, text="Test test", reset_at=None
         )
+
+
+async def test_text_camera_set_private_fallback(
+    hass: HomeAssistant, ufp: MockUFPFixture, doorbell: Camera
+) -> None:
+    """A public write the console refuses is retried over the private API."""
+
+    setup_public_camera(ufp)
+    await init_entry(hass, ufp, [doorbell])
+
+    _, entity_id = await ids_from_device_description(
+        hass, Platform.TEXT, doorbell, CAMERA[0]
+    )
+
+    public = make_public_camera(doorbell)
+    ufp.devices_ws_subscription(public_device_ws_message(public))
+    await hass.async_block_till_done()
+
+    ufp.api.update_device = AsyncMock()
+    with patch.object(
+        public,
+        "set_lcd_message",
+        new_callable=AsyncMock,
+        side_effect=NotAuthorized("granular permissions"),
+    ):
+        await hass.services.async_call(
+            "text",
+            "set_value",
+            {ATTR_ENTITY_ID: entity_id, "value": "Test test"},
+            blocking=True,
+        )
+
+    ufp.api.update_device.assert_called_once_with(
+        ModelType.CAMERA,
+        doorbell.id,
+        {
+            "lcdMessage": {
+                "type": "CUSTOM_MESSAGE",
+                "text": "Test test",
+                "resetAt": None,
+            }
+        },
+    )
 
 
 @pytest.mark.parametrize(
